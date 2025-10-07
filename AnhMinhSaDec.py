@@ -107,6 +107,22 @@ if os.path.exists(bg_music_path):
         pygame.mixer.music.set_volume(0.5)
     except Exception:
         pass
+# --- Item / Power-up images ---
+
+energy_img = safe_load_image(os.path.join(ASSET_DIR, "a glowing blue energ.png"))   # Power-up: tăng sát thương đạn
+shield_img = safe_load_image(os.path.join(ASSET_DIR, "a glowing blue shiel.png"))   # Power-up: khiên bảo vệ
+mystery_img = safe_load_image(os.path.join(ASSET_DIR, "a mysterious purple .png"))  # Power-up: hiệu ứng ngẫu nhiên
+speed_img = safe_load_image(os.path.join(ASSET_DIR, "a yellow lightning b.png"))    # Power-up: tăng tốc hoặc tốc độ bắn
+heart_img = safe_load_image(os.path.join(ASSET_DIR, "heart.png"))                   # Hồi máu / thêm mạng
+
+# (Tuỳ chọn) nếu bạn có hệ thống rơi vật phẩm:
+item_images = {
+    "energy": energy_img,
+    "shield": shield_img,
+    "mystery": mystery_img,
+    "speed": speed_img,
+    "heart": heart_img,
+}
 
 # -------- FUNCTIONS ----------
 def reset_game():
@@ -170,7 +186,9 @@ enemies_required = 5 + level * 3
 game_over = False
 game_win = False
 show_menu = True
-
+level_transition = False
+level_transition_start = 0
+transition_duration = 2000 
 # -------- CLASSES ----------
 class Player(pygame.sprite.Sprite):
     def __init__(self):
@@ -309,26 +327,46 @@ class Item(pygame.sprite.Sprite):
     def __init__(self, x, y, typ):
         super().__init__()
         self.type = typ
-        # use small tinted circle or bullet image if exists
-        img = safe_load_image(os.path.join(ASSET_DIR, "bullet.png"))
-        if img:
+        # Prefer specific asset images for items (from item_images dict).
+        # Fall back to tinted bullet-shaped sprite when asset missing.
+        img = None
+        # map our internal types to keys in item_images
+        key_map = {
+            'health': 'heart',
+            'fast_fire': 'speed',
+            'multi_shot': 'energy',
+        }
+        use_key = key_map.get(typ, 'mystery')
+        asset_img = item_images.get(use_key)
+        if asset_img:
             try:
-                img = pygame.transform.smoothscale(img, (28,28))
+                img = pygame.transform.smoothscale(asset_img, (32, 32))
             except Exception:
-                pass
-        else:
-            img = pygame.Surface((28,28), pygame.SRCALPHA)
-            pygame.draw.circle(img, (200,200,200), (14,14), 12)
-        img = img.copy()
-        if typ == 'health':
-            tint = (220,40,60)
-        elif typ == 'fast_fire':
-            tint = (60,200,220)
-        else:
-            tint = (220,200,60)
-        tint_surf = pygame.Surface(img.get_size(), pygame.SRCALPHA)
-        tint_surf.fill(tint + (0,))
-        img.blit(tint_surf, (0,0), special_flags=pygame.BLEND_RGB_ADD)
+                img = asset_img.copy()
+
+        if img is None:
+            # fallback: use bullet image tinted by type
+            img_b = safe_load_image(os.path.join(ASSET_DIR, "bullet.png"))
+            if img_b:
+                try:
+                    img = pygame.transform.smoothscale(img_b, (28, 28))
+                except Exception:
+                    img = img_b.copy()
+            else:
+                img = pygame.Surface((28,28), pygame.SRCALPHA)
+                pygame.draw.circle(img, (200,200,200), (14,14), 12)
+
+            img = img.copy()
+            if typ == 'health':
+                tint = (220,40,60)
+            elif typ == 'fast_fire':
+                tint = (60,200,220)
+            else:
+                tint = (220,200,60)
+            tint_surf = pygame.Surface(img.get_size(), pygame.SRCALPHA)
+            tint_surf.fill(tint + (0,))
+            img.blit(tint_surf, (0,0), special_flags=pygame.BLEND_RGB_ADD)
+
         self.image = img
         self.rect = self.image.get_rect(center=(x,y))
         self.vy = 2.4
@@ -462,11 +500,15 @@ while running:
             items.add(it); all_sprites.add(it)
 
         if enemies_destroyed >= enemies_required:
-            level += 1
-            enemies_destroyed = 0
-            enemies_required = 5 + level * 3
-            if level > MAX_LEVEL:
+            if level < MAX_LEVEL:
+                level += 1
+                enemies_destroyed = 0
+                enemies_required = 5 + level * 3
+                level_transition = True
+                level_transition_start = pygame.time.get_ticks()
+            else:
                 game_win = True
+
 
     # --- PLAYER HIT ---
     if pygame.time.get_ticks() > player.invulnerable_until:
@@ -493,6 +535,7 @@ while running:
         elif it.type == "multi_shot":
             dur = random.randint(POWER_DURATION_MIN, POWER_DURATION_MAX)
             player.powers['multi_shot'] = pygame.time.get_ticks() + dur
+       
 
     # --- DRAWING ---
     screen.blit(background, (0, bg_y % HEIGHT))
@@ -512,6 +555,8 @@ while running:
     font = pygame.font.SysFont(None, 28)
     hud = font.render(f"Level: {level}   Lives: {lives}", True, (255, 255, 255))
     screen.blit(hud, (10, 10))
+    enemy_info = font.render(f"Enemies: {enemies_destroyed}/{enemies_required}", True, (255, 255, 255))
+    screen.blit(enemy_info, (10, 40))
 
     # show active powers timers
     now = pygame.time.get_ticks()
@@ -529,6 +574,31 @@ while running:
         screen.blit(surf, r)
         y += surf.get_height() + 6
 
+
+    # --- LEVEL TRANSITION EFFECT (fade in/out, non-blocking) ---
+        if level_transition:
+            elapsed = pygame.time.get_ticks() - level_transition_start
+            if elapsed < transition_duration:
+                # Tính alpha (độ trong suốt) từ 0→255→0
+                half = transition_duration / 2
+                if elapsed < half:
+                    alpha = int((elapsed / half) * 255)
+                else:
+                    alpha = int(((transition_duration - elapsed) / half) * 255)
+
+                # Tạo surface mờ dần
+                overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+                text = pygame.font.SysFont(None, 72).render(f"LEVEL {level} START!", True, (255, 255, 0))
+                text.set_alpha(alpha)
+                overlay.blit(text, (WIDTH//2 - text.get_width()//2, HEIGHT//2 - text.get_height()//2))
+                screen.blit(overlay, (0, 0))
+            else:
+                level_transition = False
+                try:
+                        fireworks_sound.play()
+                except Exception:
+                        pass
+                # Kết thúc hiệu ứng chuyển cấp
     pygame.display.flip()
 
 pygame.quit()
